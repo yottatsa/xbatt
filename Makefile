@@ -1,6 +1,6 @@
-CFLAGS := -O0 -g -DDEBUG=1
-CFLAGS_P := -O2 -Wall
-LDLIBS := -lX11
+CFLAGS += -O0 -g -DDEBUG=1
+CFLAGS_P += -O2 -Wall
+LDLIBS += -lX11
 
 all: xapm procapm
 xapm: xapm.o

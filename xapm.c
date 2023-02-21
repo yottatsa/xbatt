@@ -1,7 +1,10 @@
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 
 #ifdef DEBUG
 #define PROCAPM "procapm"
@@ -10,26 +13,28 @@
 #endif
 #define FMTCHG "%i%%+"
 #define FMTDIS "%i%%"
+char msg[] = "-----";
 
 void die(char *s) {
   fprintf(stderr, "%s\n", s);
+  syslog(LOG_ERR, "%s", s);
   exit(1);
 }
 
-char msg[] = "----";
 FILE *procapm_fd;
 Display *d;
 int s;
 Window w;
 GC gc;
+char visible = 1;
 
 void draw() {
+  if (visible == 0)
+    return;
   // "1.16ac 1. 2 0x03 0x01 0x03 0x9 79% -1 ?"
   int chg, rem;
-  if (procapm_fd == NULL)
-    goto redraw;
 
-  procapm_fd = freopen(NULL, "r", procapm_fd);
+  procapm_fd = fopen(PROCAPM, "r");
   if (procapm_fd == NULL)
     goto redraw;
 
@@ -45,9 +50,13 @@ redraw:
   XClearWindow(d, w);
   XDrawString(d, w, gc, 1, 15, msg, strlen(msg));
   XFlush(d);
+
+  if (procapm_fd != NULL)
+    fclose(procapm_fd);
 }
 
-int main(void) {
+int main(int argc, char *argv[]) {
+  openlog("xapm", LOG_PID, LOG_USER);
   char *env;
   XEvent e;
   Colormap cmap;
@@ -57,11 +66,14 @@ int main(void) {
   fd_set in_fds;
   struct timeval tv;
 
-  procapm_fd = fopen(PROCAPM, "r");
+  long pv = -1;
+  if (argc == 2)
+    pv = strtol((char *)argv[1], NULL, 0);
 
   d = XOpenDisplay(NULL);
   if (d == NULL)
     die("Cannot open display.");
+  Atom wm_delete = XInternAtom(d, "WM_DELETE_WINDOW", True);
 
   s = DefaultScreen(d);
   cmap = XDefaultColormap(d, s);
@@ -80,14 +92,43 @@ int main(void) {
     XAllocColor(d, cmap, &bgcolor);
   }
 
-#ifdef DEBUG
-  printf("colors: fg=%li bg=%li\n", fgcolor.pixel, bgcolor.pixel);
-#endif
+  syslog(LOG_INFO, "colors: fg=%li bg=%li", fgcolor.pixel, bgcolor.pixel);
 
-  w = XCreateSimpleWindow(d, RootWindow(d, s), 0, 0, 100, 20, 0, fgcolor.pixel,
+  Window parent = RootWindow(d, s);
+
+  if (argc == 2)
+    parent = strtol((char *)argv[1], NULL, 0);
+  syslog(LOG_INFO, "parent window: %li", pv);
+
+  /*
+  XWindowAttributes attr;
+  XGetWindowAttributes(d, parent, &attr);
+  XVisualInfo vis;
+  XMatchVisualInfo(d, s, attr.depth, TrueColor, &vis);
+  */
+
+  XSetWindowAttributes xswattr;
+  xswattr.colormap = cmap;
+  xswattr.border_pixel = fgcolor.pixel;
+  xswattr.background_pixel = bgcolor.pixel;
+  xswattr.event_mask =
+      ExposureMask | StructureNotifyMask | VisibilityChangeMask;
+  xswattr.bit_gravity = NorthWestGravity;
+  w = XCreateWindow(
+      d, parent, 0, 0, 100, 20, 0, CopyFromParent, InputOutput, CopyFromParent,
+      CWBackPixel | CWBorderPixel | CWBitGravity | CWEventMask | CWColormap,
+      &xswattr);
+
+  /*
+  w = XCreateSimpleWindow(d, parent, 0, 0, 100, 20, 0, fgcolor.pixel,
                           bgcolor.pixel);
+  XSelectInput(d, w, ExposureMask | StructureNotifyMask | VisibilityChangeMask);
+  */
+  XClassHint class = {"xapm", "Xapm"};
+  XWMHints wm = {.flags = InputHint, .input = 1};
+  XSetWMProperties(d, w, NULL, NULL, NULL, 0, NULL, &wm, &class);
+  XStoreName(d, w, "xapm");
 
-  XSelectInput(d, w, ExposureMask | KeyPressMask);
   XMapWindow(d, w);
 
   gc = DefaultGC(d, s);
@@ -107,23 +148,31 @@ int main(void) {
         XNextEvent(d, &e);
         if (e.type == Expose)
           draw();
-#ifdef DEBUG
-        if (e.type == KeyPress)
-          goto close;
-#endif
+        if (e.type == UnmapNotify) {
+          syslog(LOG_INFO, "unmap");
+          visible = 0;
+        }
+        if (e.type == MapNotify) {
+          syslog(LOG_INFO, "map, %li", e.xmap.window);
+          visible = 1;
+        }
+        if (e.type == VisibilityNotify) {
+          syslog(LOG_INFO, "visibility");
+          visible = (e.xvisibility.state != VisibilityFullyObscured) ? 1 : 0;
+        }
+        if (e.type == ClientMessage) {
+          if (e.xclient.data.l[0] == wm_delete) {
+            goto exit;
+          }
+        }
       }
     else if (num_ready_fds == 0)
       draw();
   }
 
-#ifdef DEBUG
-close:
-#endif
-
+exit:
   XFreeColormap(d, cmap);
   XCloseDisplay(d);
   XDestroyWindow(d, w);
-  if (procapm_fd != NULL)
-    fclose(procapm_fd);
   return 0;
 }
