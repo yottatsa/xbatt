@@ -13,26 +13,35 @@
 
 char msg[] = "----";
 FILE *procapm_fd;
-
-void draw(Display *d, int s, Window *w) {
-  // "1.16ac 1. 2 0x03 0x01 0x03 0x9 79% -1 ?"
-  int chg, rem;
-  if (procapm_fd != NULL) {
-    fseek(procapm_fd, 0L, SEEK_SET);
-    fscanf(procapm_fd, "%*s %*d. %*i %*i %*i %*i %*i %i%% %i %*s", &chg, &rem);
-    if (rem == -1)
-      snprintf(msg, sizeof(msg), FMTCHG, chg);
-    else
-      snprintf(msg, sizeof(msg), FMTDIS, chg);
-  }
-  XClearWindow(d, *w);
-  XDrawString(d, *w, DefaultGC(d, s), 1, 15, msg, strlen(msg));
-  XFlush(d);
-}
+GC gc;
 
 void die(char *s) {
   fprintf(stderr, "%s\n", s);
   exit(1);
+}
+
+void draw(Display *d, int s, Window *w) {
+  // "1.16ac 1. 2 0x03 0x01 0x03 0x9 79% -1 ?"
+  int chg, rem;
+  if (procapm_fd == NULL)
+    goto redraw;
+
+  procapm_fd = freopen(NULL, "r", procapm_fd);
+  if (procapm_fd == NULL)
+    goto redraw;
+
+  if (fscanf(procapm_fd, "%*s %*d. %*i %*i %*i %*i %*i %i%% %i %*s", &chg,
+             &rem) != 2)
+    die("Failed on parsing " PROCAPM ".");
+  if (rem == -1)
+    snprintf(msg, sizeof(msg), FMTCHG, chg);
+  else
+    snprintf(msg, sizeof(msg), FMTDIS, chg);
+
+redraw:
+  XClearWindow(d, *w);
+  XDrawString(d, *w, DefaultGC(d, s), 1, 15, msg, strlen(msg));
+  XFlush(d);
 }
 
 int main(void) {
@@ -79,7 +88,10 @@ int main(void) {
       draw(d, s, &w);
   }
 
+#ifdef DEBUG
 close:
+#endif
+
   XCloseDisplay(d);
   if (procapm_fd != NULL)
     fclose(procapm_fd);
