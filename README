@@ -2,3 +2,7 @@ xbatt
 -----
 
 Prints battery level using Xlib
+
+## Usage
+
+    env BGCOLOR=... FGCOLOR=... ./xapm 

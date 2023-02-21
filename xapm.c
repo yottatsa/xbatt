@@ -11,16 +11,19 @@
 #define FMTCHG "%i%%+"
 #define FMTDIS "%i%%"
 
-char msg[] = "----";
-FILE *procapm_fd;
-GC gc;
-
 void die(char *s) {
   fprintf(stderr, "%s\n", s);
   exit(1);
 }
 
-void draw(Display *d, int s, Window *w) {
+char msg[] = "----";
+FILE *procapm_fd;
+Display *d;
+int s;
+Window w;
+GC gc;
+
+void draw() {
   // "1.16ac 1. 2 0x03 0x01 0x03 0x9 79% -1 ?"
   int chg, rem;
   if (procapm_fd == NULL)
@@ -39,16 +42,16 @@ void draw(Display *d, int s, Window *w) {
     snprintf(msg, sizeof(msg), FMTDIS, chg);
 
 redraw:
-  XClearWindow(d, *w);
-  XDrawString(d, *w, DefaultGC(d, s), 1, 15, msg, strlen(msg));
+  XClearWindow(d, w);
+  XDrawString(d, w, gc, 1, 15, msg, strlen(msg));
   XFlush(d);
 }
 
 int main(void) {
-  Display *d;
-  Window w;
+  char *env;
   XEvent e;
-  int s;
+  Colormap cmap;
+  XColor fgcolor, bgcolor;
 
   int x11_fd;
   fd_set in_fds;
@@ -61,10 +64,35 @@ int main(void) {
     die("Cannot open display.");
 
   s = DefaultScreen(d);
-  w = XCreateSimpleWindow(d, RootWindow(d, s), 0, 0, 100, 20, 0,
-                          BlackPixel(d, s), WhitePixel(d, s));
+  cmap = XDefaultColormap(d, s);
+
+  fgcolor.pixel = BlackPixel(d, s);
+  env = getenv("FGCOLOR");
+  if (env != NULL) {
+    XParseColor(d, cmap, env, &fgcolor);
+    XAllocColor(d, cmap, &fgcolor);
+  }
+
+  bgcolor.pixel = WhitePixel(d, s);
+  env = getenv("BGCOLOR");
+  if (env != NULL) {
+    XParseColor(d, cmap, env, &bgcolor);
+    XAllocColor(d, cmap, &bgcolor);
+  }
+
+#ifdef DEBUG
+  printf("colors: fg=%li bg=%li\n", fgcolor.pixel, bgcolor.pixel);
+#endif
+
+  w = XCreateSimpleWindow(d, RootWindow(d, s), 0, 0, 100, 20, 0, fgcolor.pixel,
+                          bgcolor.pixel);
+
   XSelectInput(d, w, ExposureMask | KeyPressMask);
   XMapWindow(d, w);
+
+  gc = DefaultGC(d, s);
+  XSetForeground(d, gc, fgcolor.pixel);
+
   XFlush(d);
   x11_fd = ConnectionNumber(d);
 
@@ -78,21 +106,23 @@ int main(void) {
       while (XPending(d)) {
         XNextEvent(d, &e);
         if (e.type == Expose)
-          draw(d, s, &w);
+          draw();
 #ifdef DEBUG
         if (e.type == KeyPress)
           goto close;
 #endif
       }
     else if (num_ready_fds == 0)
-      draw(d, s, &w);
+      draw();
   }
 
 #ifdef DEBUG
 close:
 #endif
 
+  XFreeColormap(d, cmap);
   XCloseDisplay(d);
+  XDestroyWindow(d, w);
   if (procapm_fd != NULL)
     fclose(procapm_fd);
   return 0;
