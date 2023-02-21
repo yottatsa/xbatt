@@ -1,0 +1,4 @@
+xbatt
+-----
+
+Prints battery level using Xlib
